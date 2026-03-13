@@ -1,143 +1,43 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { useParams, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Restaurant, Category, MenuItem, CartItem } from '@/types'
-import { ShoppingCart, Plus, Minus, X, ChevronRight } from 'lucide-react'
+import { Order, Restaurant } from '@/types'
+import { Clock, CheckCircle, XCircle, Package, Printer, ArrowLeft, ChefHat } from 'lucide-react'
 
-// ─── Cart logic ───────────────────────────────────────────────────
-const useCart = () => {
-  const [cart, setCart] = useState<CartItem[]>([])
+const steps = [
+  { key: 'pending', label: 'Order received', icon: Clock, desc: 'Waiting for the restaurant to confirm…' },
+  { key: 'accepted', label: 'Being prepared', icon: ChefHat, desc: 'The restaurant is preparing your order' },
+  { key: 'completed', label: 'Ready!', icon: CheckCircle, desc: 'Your order is ready. Enjoy your meal!' },
+]
 
-  const add = (item: MenuItem) => setCart((c) => {
-    const ex = c.find((i) => i.id === item.id)
-    if (ex) return c.map((i) => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i)
-    return [...c, { ...item, quantity: 1 }]
-  })
-
-  const remove = (id: string) => setCart((c) => {
-    const ex = c.find((i) => i.id === id)
-    if (!ex) return c
-    if (ex.quantity <= 1) return c.filter((i) => i.id !== id)
-    return c.map((i) => i.id === id ? { ...i, quantity: i.quantity - 1 } : i)
-  })
-
-  const clear = () => setCart([])
-  const total = cart.reduce((s, i) => s + i.price * i.quantity, 0)
-  const count = cart.reduce((s, i) => s + i.quantity, 0)
-
-  return { cart, add, remove, clear, total, count }
-}
-
-// ─── Order modal ──────────────────────────────────────────────────
-const OrderModal = ({
-  cart, total, currency, restaurantId, onClose, onSuccess,
-}: {
-  cart: CartItem[]; total: number; currency: string; restaurantId: string;
-  onClose: () => void; onSuccess: (orderId: string) => void
-}) => {
-  const [form, setForm] = useState({ name: '', phone: '', address: '', notes: '' })
-  const [loading, setLoading] = useState(false)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!form.name.trim() || !form.phone.trim()) { toast.error('Name and phone are required'); return }
-    setLoading(true)
-    const items = cart.map((i) => ({ id: i.id, name: i.name, price: i.price, quantity: i.quantity }))
-    const { data, error } = await supabase.from('orders').insert({
-      restaurant_id: restaurantId,
-      customer_name: form.name.trim(),
-      customer_phone: form.phone.trim(),
-      customer_address: form.address.trim() || null,
-      notes: form.notes.trim() || null,
-      items,
-      total,
-    }).select().single()
-    setLoading(false)
-    if (error) { toast.error('Failed to place order. Please try again.'); return }
-    onSuccess(data.id)
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:p-6">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="font-bold text-gray-900 text-lg">Your details</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors"><X size={20} /></button>
-        </div>
-        <form onSubmit={submit} className="px-6 py-5 space-y-4">
-          <div>
-            <label className="block text-xs text-gray-500 uppercase tracking-wider font-medium mb-1.5">Name *</label>
-            <input type="text" required placeholder="Your name" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-brand transition-colors" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 uppercase tracking-wider font-medium mb-1.5">Phone *</label>
-            <input type="tel" required placeholder="+971 50 000 0000" value={form.phone} onChange={(e) => setForm(f => ({ ...f, phone: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-brand transition-colors" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 uppercase tracking-wider font-medium mb-1.5">Delivery address</label>
-            <input type="text" placeholder="Building, street, area" value={form.address} onChange={(e) => setForm(f => ({ ...f, address: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-brand transition-colors" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 uppercase tracking-wider font-medium mb-1.5">Notes</label>
-            <textarea rows={2} placeholder="Allergies, special requests..." value={form.notes} onChange={(e) => setForm(f => ({ ...f, notes: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-brand transition-colors resize-none" />
-          </div>
-          {/* Order summary */}
-          <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-1">
-            {cart.map((item) => (
-              <div key={item.id} className="flex justify-between text-sm text-gray-600">
-                <span>{item.quantity}× {item.name}</span>
-                <span className="font-mono">{currency} {(item.price * item.quantity).toFixed(2)}</span>
-              </div>
-            ))}
-            <div className="flex justify-between font-bold text-gray-900 pt-2 border-t border-gray-200 mt-1">
-              <span>Total</span>
-              <span className="text-brand font-mono">{currency} {total.toFixed(2)}</span>
-            </div>
-          </div>
-          <button type="submit" disabled={loading}
-            className="w-full bg-brand text-white font-bold py-3.5 rounded-xl hover:bg-orange-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-base">
-            {loading ? 'Placing order…' : (<>Place order <ChevronRight size={18} /></>)}
-          </button>
-        </form>
-      </div>
-    </div>
-  )
-}
-
-// ─── Menu page ────────────────────────────────────────────────────
-const MenuPage = () => {
-  const { slug } = useParams<{ slug: string }>()
+const OrderTrackingPage = () => {
+  const { orderId } = useParams<{ orderId: string }>()
+  const [order, setOrder] = useState<Order | null>(null)
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
-  const [categories, setCategories] = useState<Category[]>([])
-  const [items, setItems] = useState<MenuItem[]>([])
-  const [activeCategory, setActiveCategory] = useState<string>('all')
   const [loading, setLoading] = useState(true)
-  const [showCart, setShowCart] = useState(false)
-  const [showOrderModal, setShowOrderModal] = useState(false)
-  const [orderId, setOrderId] = useState<string | null>(null)
-  const { cart, add, remove, clear, total, count } = useCart()
 
-  const fetchData = useCallback(async () => {
-    if (!slug) return
-    const { data: rest } = await supabase.from('restaurants').select('*').eq('slug', slug).single()
-    if (!rest) { setLoading(false); return }
-    setRestaurant(rest)
-    const [{ data: cats }, { data: its }] = await Promise.all([
-      supabase.from('categories').select('*').eq('restaurant_id', rest.id).order('sort_order'),
-      supabase.from('menu_items').select('*').eq('restaurant_id', rest.id).order('created_at'),
-    ])
-    if (cats) setCategories(cats)
-    if (its) setItems(its)
+  const fetchOrder = useCallback(async () => {
+    if (!orderId) return
+    const { data: ord } = await supabase.from('orders').select('*').eq('id', orderId).single()
+    if (!ord) { setLoading(false); return }
+    setOrder(ord as Order)
+    const { data: rest } = await supabase.from('restaurants').select('*').eq('id', ord.restaurant_id).single()
+    if (rest) setRestaurant(rest as Restaurant)
     setLoading(false)
-  }, [slug])
+  }, [orderId])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => {
+    fetchOrder()
+    // Real-time status updates
+    const channel = supabase
+      .channel(`track-${orderId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'orders',
+        filter: `id=eq.${orderId}`,
+      }, () => fetchOrder())
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [fetchOrder, orderId])
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -145,156 +45,168 @@ const MenuPage = () => {
     </div>
   )
 
-  if (!restaurant) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center text-gray-400">
-        <p className="text-lg font-bold mb-1">Restaurant not found</p>
-        <p className="text-sm">This menu link doesn't exist.</p>
-      </div>
-    </div>
-  )
-
-  if (orderId) return (
+  if (!order || !restaurant) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
-      <div className="text-center max-w-sm">
-        <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-5">
-          <span className="text-3xl">✅</span>
-        </div>
-        <h1 className="text-2xl font-black text-gray-900 mb-2">Order placed!</h1>
-        <p className="text-gray-500 mb-6">The restaurant has received your order and will confirm shortly.</p>
-        <a href={`/bill/${orderId}`} target="_blank"
-          className="inline-flex items-center gap-2 bg-brand text-white font-bold px-6 py-3 rounded-xl hover:bg-orange-500 transition-colors">
-          View / Print Bill
-        </a>
+      <div className="text-center text-gray-400">
+        <p className="text-lg font-bold mb-1">Order not found</p>
+        <p className="text-sm">This tracking link doesn't exist.</p>
       </div>
     </div>
   )
 
-  const filtered = activeCategory === 'all' ? items : items.filter(i => i.category_id === activeCategory)
-  const available = filtered.filter(i => i.is_available)
-  const unavailable = filtered.filter(i => !i.is_available)
+  const isDeclined = order.status === 'declined'
+  const isCompleted = order.status === 'completed'
+  const currentStepIdx = isDeclined ? -1 : steps.findIndex(s => s.key === order.status)
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-5 py-5">
-        <div className="max-w-2xl mx-auto flex items-center gap-4">
-          {restaurant.logo_url && <img src={restaurant.logo_url} alt={restaurant.name} className="w-14 h-14 rounded-2xl object-cover flex-shrink-0" />}
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="font-black text-xl text-gray-900">{restaurant.name}</h1>
-              <span className={`text-[10px] font-mono uppercase tracking-widest border px-2 py-0.5 rounded-full ${restaurant.is_open ? 'bg-green-50 text-green-600 border-green-200' : 'bg-red-50 text-red-500 border-red-200'}`}>
-                {restaurant.is_open ? 'Open' : 'Closed'}
-              </span>
-            </div>
-            {restaurant.description && <p className="text-gray-500 text-sm mt-0.5">{restaurant.description}</p>}
-          </div>
+      <div className="bg-white border-b border-gray-100 px-5 py-4 sticky top-0 z-10">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          <Link to={`/menu/${restaurant.slug}`}
+            className="flex items-center gap-2 text-gray-400 hover:text-gray-600 transition-colors text-sm font-medium">
+            <ArrowLeft size={16} /> Back to menu
+          </Link>
+          <a href={`/bill/${order.id}`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-brand hover:text-orange-500 text-sm font-medium transition-colors">
+            <Printer size={15} /> Print bill
+          </a>
         </div>
       </div>
 
-      {/* Category tabs */}
-      {categories.length > 0 && (
-        <div className="bg-white border-b border-gray-100 sticky top-0 z-10">
-          <div className="max-w-2xl mx-auto px-5 flex gap-2 overflow-x-auto py-3 scrollbar-none">
-            <button onClick={() => setActiveCategory('all')}
-              className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeCategory === 'all' ? 'bg-brand text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-              All
-            </button>
-            {categories.map((cat) => (
-              <button key={cat.id} onClick={() => setActiveCategory(cat.id)}
-                className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeCategory === cat.id ? 'bg-brand text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                {cat.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="max-w-md mx-auto px-5 py-8 space-y-4">
 
-      {/* Items */}
-      <div className="max-w-2xl mx-auto px-5 py-6 pb-32 space-y-3">
-        {available.map((item) => {
-          const inCart = cart.find(i => i.id === item.id)
-          return (
-            <div key={item.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden flex items-center gap-4 p-4 hover:border-gray-200 transition-colors">
-              {item.image_url && <img src={item.image_url} alt={item.name} className="w-20 h-20 rounded-xl object-cover flex-shrink-0" />}
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-gray-900">{item.name}</p>
-                {item.description && <p className="text-gray-500 text-sm mt-0.5 line-clamp-2">{item.description}</p>}
-                <p className="text-brand font-bold font-mono mt-1">{restaurant.currency} {item.price.toFixed(2)}</p>
-              </div>
-              <div className="flex-shrink-0">
-                {inCart ? (
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => remove(item.id)} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"><Minus size={14} /></button>
-                    <span className="w-5 text-center font-bold text-gray-900 text-sm">{inCart.quantity}</span>
-                    <button onClick={() => add(item)} className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center hover:bg-orange-500 transition-colors"><Plus size={14} /></button>
-                  </div>
-                ) : (
-                  <button onClick={() => restaurant.is_open ? add(item) : toast.error('Restaurant is currently closed')}
-                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${restaurant.is_open ? 'bg-brand text-white hover:bg-orange-500' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}>
-                    <Plus size={18} />
-                  </button>
-                )}
+        {/* Status hero card */}
+        {isDeclined ? (
+          <div className="bg-red-50 border border-red-100 rounded-2xl p-6 text-center">
+            <XCircle size={48} className="text-red-400 mx-auto mb-3" />
+            <h1 className="font-black text-xl text-gray-900 mb-2">Order declined</h1>
+            <p className="text-gray-500 text-sm mb-4">The restaurant couldn't accept your order right now.</p>
+            {restaurant.phone && (
+              <a href={`tel:${restaurant.phone}`}
+                className="inline-flex items-center gap-2 bg-white border border-red-200 text-red-500 px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-red-50 transition-colors">
+                Call {restaurant.name}
+              </a>
+            )}
+          </div>
+        ) : isCompleted ? (
+          <div className="bg-green-50 border border-green-100 rounded-2xl p-6 text-center">
+            <div className="text-4xl mb-2">🎉</div>
+            <h1 className="font-black text-xl text-gray-900 mb-1">Order ready!</h1>
+            <p className="text-gray-500 text-sm">Your order is ready. Enjoy your meal!</p>
+          </div>
+        ) : (
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center">
+            <div className="w-14 h-14 rounded-full bg-brand/10 flex items-center justify-center mx-auto mb-3">
+              <div className="w-6 h-6 rounded-full border-2 border-brand border-t-transparent animate-spin" />
+            </div>
+            <h1 className="font-black text-xl text-gray-900 mb-1">
+              {order.status === 'pending' ? 'Order received' : 'Being prepared'}
+            </h1>
+            <p className="text-gray-500 text-sm">
+              {order.status === 'pending'
+                ? 'Waiting for the restaurant to confirm…'
+                : `${restaurant.name} is preparing your order`}
+            </p>
+            <p className="text-xs text-gray-300 mt-2 font-mono">This page updates automatically</p>
+          </div>
+        )}
+
+        {/* Progress steps */}
+        {!isDeclined && (
+          <div className="bg-white rounded-2xl border border-gray-100 p-5">
+            <h2 className="font-bold text-gray-900 text-sm mb-5">Order progress</h2>
+            <div className="relative">
+              {/* Connecting line */}
+              <div className="absolute left-[17px] top-0 bottom-0 w-0.5 bg-gray-100" />
+              <div className="space-y-5">
+                {steps.map((step, i) => {
+                  const done = i < currentStepIdx
+                  const active = i === currentStepIdx
+                  const Icon = step.icon
+                  return (
+                    <div key={step.key} className="flex items-start gap-4 relative">
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 z-10 transition-all ${
+                        done ? 'bg-brand text-white' :
+                        active ? 'bg-brand text-white ring-4 ring-brand/20' :
+                        'bg-gray-100 text-gray-300'
+                      }`}>
+                        <Icon size={16} />
+                      </div>
+                      <div className="flex-1 pt-1.5">
+                        <p className={`font-semibold text-sm ${done || active ? 'text-gray-900' : 'text-gray-300'}`}>
+                          {step.label}
+                        </p>
+                        {active && (
+                          <p className="text-xs text-gray-400 mt-0.5">{step.desc}</p>
+                        )}
+                        {done && (
+                          <p className="text-xs text-green-500 mt-0.5">✓ Done</p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
-          )
-        })}
+          </div>
+        )}
 
-        {unavailable.length > 0 && (
-          <div className="pt-4">
-            <p className="text-xs text-gray-400 uppercase tracking-widest font-medium mb-3">Unavailable</p>
-            {unavailable.map((item) => (
-              <div key={item.id} className="bg-white rounded-2xl border border-gray-100 flex items-center gap-4 p-4 opacity-50">
-                {item.image_url && <img src={item.image_url} alt={item.name} className="w-20 h-20 rounded-xl object-cover flex-shrink-0 grayscale" />}
-                <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-400 line-through">{item.name}</p>
-                  <p className="text-gray-400 font-mono text-sm">{restaurant.currency} {item.price.toFixed(2)}</p>
-                </div>
-                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">Sold out</span>
+        {/* Order summary */}
+        <div className="bg-white rounded-2xl border border-gray-100 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-bold text-gray-900">Your order</h2>
+            <span className="text-xs text-gray-400 font-mono">
+              {new Date(order.created_at).toLocaleString()}
+            </span>
+          </div>
+          <div className="space-y-2.5 mb-4">
+            {order.items.map((item, i) => (
+              <div key={i} className="flex justify-between text-sm">
+                <span className="text-gray-700">{item.quantity}× {item.name}</span>
+                <span className="text-gray-500 font-mono">{restaurant.currency} {(item.price * item.quantity).toFixed(2)}</span>
               </div>
             ))}
           </div>
-        )}
-
-        {filtered.length === 0 && (
-          <div className="text-center py-16 text-gray-400">
-            <p>No items in this category yet.</p>
-          </div>
-        )}
-      </div>
-
-      {/* Floating cart button */}
-      {count > 0 && (
-        <div className="fixed bottom-6 left-0 right-0 px-5 z-20">
-          <div className="max-w-2xl mx-auto">
-            <button onClick={() => setShowOrderModal(true)}
-              className="w-full bg-brand text-white font-bold py-4 rounded-2xl flex items-center justify-between px-5 hover:bg-orange-500 transition-colors shadow-2xl shadow-brand/30">
-              <div className="flex items-center gap-2">
-                <span className="bg-white/20 text-white w-6 h-6 rounded-full text-sm flex items-center justify-center font-black">{count}</span>
-                <span>View cart</span>
-              </div>
-              <span className="font-mono">{restaurant.currency} {total.toFixed(2)}</span>
-            </button>
+          <div className="flex justify-between font-bold pt-3 border-t border-gray-100">
+            <span className="text-gray-900">Total</span>
+            <span className="text-brand font-mono text-lg">{restaurant.currency} {order.total.toFixed(2)}</span>
           </div>
         </div>
-      )}
 
-      {/* Order modal */}
-      {showOrderModal && (
-        <OrderModal
-          cart={cart} total={total} currency={restaurant.currency}
-          restaurantId={restaurant.id}
-          onClose={() => setShowOrderModal(false)}
-          onSuccess={(id) => { setOrderId(id); clear(); setShowOrderModal(false) }}
-        />
-      )}
+        {/* Delivery details */}
+        <div className="bg-white rounded-2xl border border-gray-100 p-5">
+          <h2 className="font-bold text-gray-900 mb-3">Delivery details</h2>
+          <div className="space-y-2 text-sm text-gray-600">
+            <div className="flex gap-2">
+              <span className="text-gray-400 w-16 flex-shrink-0">Name</span>
+              <span>{order.customer_name}</span>
+            </div>
+            <div className="flex gap-2">
+              <span className="text-gray-400 w-16 flex-shrink-0">Phone</span>
+              <a href={`tel:${order.customer_phone}`} className="text-brand hover:underline">{order.customer_phone}</a>
+            </div>
+            {order.customer_address && (
+              <div className="flex gap-2">
+                <span className="text-gray-400 w-16 flex-shrink-0">Address</span>
+                <span>{order.customer_address}</span>
+              </div>
+            )}
+            {order.notes && (
+              <div className="flex gap-2">
+                <span className="text-gray-400 w-16 flex-shrink-0">Notes</span>
+                <span>{order.notes}</span>
+              </div>
+            )}
+          </div>
+        </div>
 
-      {/* Footer */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 py-2 text-center z-10">
-        <p className="text-[11px] text-gray-300">Powered by <a href="https://wajba.app" className="text-brand font-medium">Wajba</a></p>
+        <p className="text-center text-xs text-gray-300 py-4">
+          Powered by <a href="https://wajba.app" className="text-brand font-medium hover:underline">Wajba</a>
+        </p>
       </div>
     </div>
   )
 }
 
-export default MenuPage
+export default OrderTrackingPage
