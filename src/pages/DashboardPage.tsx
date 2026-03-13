@@ -4,10 +4,11 @@ import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { Restaurant, Category, MenuItem, Order } from '@/types'
+import ImageUpload from '@/components/ImageUpload'
 import {
   ShoppingBag, UtensilsCrossed, Settings, LogOut, Plus, Trash2,
   Check, X, ExternalLink, ToggleLeft, ToggleRight, Printer, Clock,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, History, TrendingUp,
 } from 'lucide-react'
 
 // ─── Shared UI ────────────────────────────────────────────────────
@@ -36,124 +37,218 @@ const StatusBadge = ({ status }: { status: Order['status'] }) => {
   )
 }
 
+// ─── Order card (shared between OrdersTab & HistoryTab) ───────────
+const OrderCard = ({ order, restaurant, onUpdate, showActions }: {
+  order: Order; restaurant: Restaurant; onUpdate: () => void; showActions: boolean
+}) => {
+  const [expanded, setExpanded] = useState(false)
+
+  const updateStatus = async (status: Order['status']) => {
+    const { error } = await supabase.from('orders').update({ status }).eq('id', order.id)
+    if (error) { toast.error('Failed to update order'); return }
+    toast.success(`Order ${status}`)
+    onUpdate()
+  }
+
+  return (
+    <div className="bg-[#111] border border-white/10 rounded-xl overflow-hidden hover:border-white/20 transition-colors">
+      <div className="flex items-center justify-between px-5 py-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-white">{order.customer_name}</span>
+              <StatusBadge status={order.status} />
+            </div>
+            <div className="flex items-center gap-2 mt-0.5 text-xs text-white/30 font-mono">
+              <Clock size={11} />
+              {new Date(order.created_at).toLocaleString()}
+              <span>·</span>
+              <span>{restaurant.currency} {order.total.toFixed(2)}</span>
+              <span>·</span>
+              <span>{order.customer_phone}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+          {showActions && order.status === 'pending' && (
+            <>
+              <button onClick={() => updateStatus('accepted')}
+                className="flex items-center gap-1.5 bg-green-500/10 text-green-400 border border-green-500/20 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-500/20 transition-colors">
+                <Check size={13} /> Accept
+              </button>
+              <button onClick={() => updateStatus('declined')}
+                className="flex items-center gap-1.5 bg-red-500/10 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-colors">
+                <X size={13} /> Decline
+              </button>
+            </>
+          )}
+          {showActions && order.status === 'accepted' && (
+            <button onClick={() => updateStatus('completed')}
+              className="flex items-center gap-1.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-500/20 transition-colors">
+              <Check size={13} /> Complete
+            </button>
+          )}
+          <Link to={`/bill/${order.id}`} target="_blank"
+            className="flex items-center gap-1.5 bg-white/5 text-white/50 border border-white/10 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-white/10 transition-colors">
+            <Printer size={13} /> Bill
+          </Link>
+          <button onClick={() => setExpanded(!expanded)}
+            className="text-white/30 hover:text-white transition-colors p-1">
+            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-white/10 px-5 py-4 bg-[#0d0d0d]">
+          <div className="space-y-2 mb-3">
+            {order.items.map((item, i) => (
+              <div key={i} className="flex justify-between text-sm">
+                <span className="text-white/70">{item.quantity}× {item.name}</span>
+                <span className="text-white/50 font-mono">{restaurant.currency} {(item.price * item.quantity).toFixed(2)}</span>
+              </div>
+            ))}
+            <div className="flex justify-between font-bold pt-2 border-t border-white/10">
+              <span className="text-white">Total</span>
+              <span className="text-brand font-mono">{restaurant.currency} {order.total.toFixed(2)}</span>
+            </div>
+          </div>
+          {order.customer_address && (
+            <p className="text-xs text-white/30 font-mono">📍 {order.customer_address}</p>
+          )}
+          {order.notes && (
+            <p className="text-xs text-white/30 mt-1">📝 {order.notes}</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Orders tab ───────────────────────────────────────────────────
 const OrdersTab = ({ restaurant }: { restaurant: Restaurant }) => {
   const [orders, setOrders] = useState<Order[]>([])
-  const [expanded, setExpanded] = useState<string | null>(null)
 
   const fetchOrders = useCallback(async () => {
     const { data } = await supabase
       .from('orders')
       .select('*')
       .eq('restaurant_id', restaurant.id)
+      .in('status', ['pending', 'accepted'])
       .order('created_at', { ascending: false })
     if (data) setOrders(data as Order[])
   }, [restaurant.id])
 
   useEffect(() => {
     fetchOrders()
-    // Real-time subscription
     const channel = supabase
-      .channel('orders-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `restaurant_id=eq.${restaurant.id}` },
-        () => fetchOrders()
-      )
+      .channel('orders-live')
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'orders',
+        filter: `restaurant_id=eq.${restaurant.id}`,
+      }, () => fetchOrders())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [fetchOrders])
 
-  const updateStatus = async (id: string, status: Order['status']) => {
-    const { error } = await supabase.from('orders').update({ status }).eq('id', id)
-    if (error) { toast.error('Failed to update order'); return }
-    toast.success(`Order ${status}`)
-    fetchOrders()
-  }
-
   if (orders.length === 0) return (
     <div className="flex flex-col items-center justify-center py-24 text-white/20">
       <ShoppingBag size={40} className="mb-4 opacity-30" />
-      <p className="font-mono text-sm">No orders yet</p>
-      <p className="text-xs mt-1">Share your menu link to start receiving orders</p>
+      <p className="font-mono text-sm">No active orders</p>
+      <p className="text-xs mt-1">Pending and accepted orders will show here</p>
     </div>
   )
 
   return (
     <div className="space-y-3">
       {orders.map((order) => (
-        <div key={order.id} className="bg-[#111] border border-white/10 rounded-xl overflow-hidden hover:border-white/20 transition-colors">
-          {/* Order header */}
-          <div className="flex items-center justify-between px-5 py-4">
-            <div className="flex items-center gap-3 min-w-0">
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-bold text-white">{order.customer_name}</span>
-                  <StatusBadge status={order.status} />
-                </div>
-                <div className="flex items-center gap-2 mt-0.5 text-xs text-white/30 font-mono">
-                  <Clock size={11} />
-                  {new Date(order.created_at).toLocaleString()}
-                  <span>·</span>
-                  <span>{restaurant.currency} {order.total.toFixed(2)}</span>
-                  <span>·</span>
-                  <span>{order.customer_phone}</span>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-              {order.status === 'pending' && (
-                <>
-                  <button onClick={() => updateStatus(order.id, 'accepted')}
-                    className="flex items-center gap-1.5 bg-green-500/10 text-green-400 border border-green-500/20 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-500/20 transition-colors">
-                    <Check size={13} /> Accept
-                  </button>
-                  <button onClick={() => updateStatus(order.id, 'declined')}
-                    className="flex items-center gap-1.5 bg-red-500/10 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-colors">
-                    <X size={13} /> Decline
-                  </button>
-                </>
-              )}
-              {order.status === 'accepted' && (
-                <button onClick={() => updateStatus(order.id, 'completed')}
-                  className="flex items-center gap-1.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-500/20 transition-colors">
-                  <Check size={13} /> Complete
-                </button>
-              )}
-              <Link to={`/bill/${order.id}`} target="_blank"
-                className="flex items-center gap-1.5 bg-white/5 text-white/50 border border-white/10 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-white/10 transition-colors">
-                <Printer size={13} /> Bill
-              </Link>
-              <button onClick={() => setExpanded(expanded === order.id ? null : order.id)}
-                className="text-white/30 hover:text-white transition-colors p-1">
-                {expanded === order.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Expanded items */}
-          {expanded === order.id && (
-            <div className="border-t border-white/10 px-5 py-4 bg-[#0d0d0d]">
-              <div className="space-y-2 mb-3">
-                {order.items.map((item, i) => (
-                  <div key={i} className="flex justify-between text-sm">
-                    <span className="text-white/70">{item.quantity}× {item.name}</span>
-                    <span className="text-white/50 font-mono">{restaurant.currency} {(item.price * item.quantity).toFixed(2)}</span>
-                  </div>
-                ))}
-                <div className="flex justify-between font-bold pt-2 border-t border-white/10">
-                  <span className="text-white">Total</span>
-                  <span className="text-brand font-mono">{restaurant.currency} {order.total.toFixed(2)}</span>
-                </div>
-              </div>
-              {order.customer_address && (
-                <p className="text-xs text-white/30 font-mono">📍 {order.customer_address}</p>
-              )}
-              {order.notes && (
-                <p className="text-xs text-white/30 mt-1">📝 {order.notes}</p>
-              )}
-            </div>
-          )}
-        </div>
+        <OrderCard key={order.id} order={order} restaurant={restaurant} onUpdate={fetchOrders} showActions />
       ))}
+    </div>
+  )
+}
+
+// ─── History tab ──────────────────────────────────────────────────
+type DateFilter = 'today' | 'week' | 'all'
+
+const HistoryTab = ({ restaurant }: { restaurant: Restaurant }) => {
+  const [orders, setOrders] = useState<Order[]>([])
+  const [filter, setFilter] = useState<DateFilter>('today')
+  const [loading, setLoading] = useState(true)
+
+  const fetchHistory = useCallback(async () => {
+    setLoading(true)
+    let query = supabase
+      .from('orders')
+      .select('*')
+      .eq('restaurant_id', restaurant.id)
+      .in('status', ['completed', 'declined'])
+      .order('created_at', { ascending: false })
+
+    if (filter === 'today') {
+      const start = new Date(); start.setHours(0, 0, 0, 0)
+      query = query.gte('created_at', start.toISOString())
+    } else if (filter === 'week') {
+      const start = new Date(); start.setDate(start.getDate() - 7)
+      query = query.gte('created_at', start.toISOString())
+    }
+
+    const { data } = await query
+    if (data) setOrders(data as Order[])
+    setLoading(false)
+  }, [restaurant.id, filter])
+
+  useEffect(() => { fetchHistory() }, [fetchHistory])
+
+  const completed = orders.filter(o => o.status === 'completed')
+  const revenue = completed.reduce((s, o) => s + o.total, 0)
+
+  return (
+    <div className="space-y-6">
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Total orders', value: orders.length },
+          { label: 'Completed', value: completed.length },
+          { label: `Revenue (${restaurant.currency})`, value: revenue.toFixed(2) },
+        ].map((stat) => (
+          <div key={stat.label} className="bg-[#111] border border-white/10 rounded-xl p-4">
+            <p className="text-2xl font-black text-white">{stat.value}</p>
+            <p className="text-xs text-white/30 font-mono mt-0.5">{stat.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Date filter */}
+      <div className="flex gap-2">
+        {(['today', 'week', 'all'] as DateFilter[]).map((f) => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-4 py-1.5 rounded-full text-xs font-mono uppercase tracking-wider transition-colors ${
+              filter === f ? 'bg-brand text-white' : 'bg-[#1a1a1a] text-white/40 hover:text-white/70 border border-white/10'
+            }`}>
+            {f === 'today' ? 'Today' : f === 'week' ? 'This week' : 'All time'}
+          </button>
+        ))}
+      </div>
+
+      {/* Orders */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <div className="w-5 h-5 rounded-full border-2 border-brand border-t-transparent animate-spin" />
+        </div>
+      ) : orders.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-white/20">
+          <TrendingUp size={40} className="mb-4 opacity-30" />
+          <p className="font-mono text-sm">No order history yet</p>
+          <p className="text-xs mt-1">Completed and declined orders will appear here</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {orders.map((order) => (
+            <OrderCard key={order.id} order={order} restaurant={restaurant} onUpdate={fetchHistory} showActions={false} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -164,6 +259,7 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
   const [items, setItems] = useState<MenuItem[]>([])
   const [newCat, setNewCat] = useState('')
   const [showItemForm, setShowItemForm] = useState(false)
+  const [editingItem, setEditingItem] = useState<MenuItem | null>(null)
   const [itemForm, setItemForm] = useState({
     name: '', description: '', price: '', category_id: '', image_url: '', is_available: true,
   })
@@ -182,7 +278,9 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
 
   const addCategory = async () => {
     if (!newCat.trim()) return
-    const { error } = await supabase.from('categories').insert({ restaurant_id: restaurant.id, name: newCat.trim(), sort_order: categories.length })
+    const { error } = await supabase.from('categories').insert({
+      restaurant_id: restaurant.id, name: newCat.trim(), sort_order: categories.length,
+    })
     if (error) { toast.error('Failed to add category'); return }
     setNewCat('')
     fetchMenu()
@@ -194,11 +292,31 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
     toast.success('Category removed')
   }
 
-  const addItem = async (e: React.FormEvent) => {
+  const openEditForm = (item: MenuItem) => {
+    setEditingItem(item)
+    setItemForm({
+      name: item.name,
+      description: item.description || '',
+      price: item.price.toString(),
+      category_id: item.category_id || '',
+      image_url: item.image_url || '',
+      is_available: item.is_available,
+    })
+    setShowItemForm(true)
+  }
+
+  const resetForm = () => {
+    setEditingItem(null)
+    setItemForm({ name: '', description: '', price: '', category_id: '', image_url: '', is_available: true })
+    setShowItemForm(false)
+  }
+
+  const saveItem = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!itemForm.name.trim() || !itemForm.price) { toast.error('Name and price required'); return }
     setSaving(true)
-    const { error } = await supabase.from('menu_items').insert({
+
+    const payload = {
       restaurant_id: restaurant.id,
       category_id: itemForm.category_id || null,
       name: itemForm.name.trim(),
@@ -206,12 +324,21 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
       price: parseFloat(itemForm.price),
       image_url: itemForm.image_url.trim() || null,
       is_available: itemForm.is_available,
-    })
-    setSaving(false)
-    if (error) { toast.error('Failed to add item'); return }
-    toast.success('Item added!')
-    setItemForm({ name: '', description: '', price: '', category_id: '', image_url: '', is_available: true })
-    setShowItemForm(false)
+    }
+
+    if (editingItem) {
+      const { error } = await supabase.from('menu_items').update(payload).eq('id', editingItem.id)
+      setSaving(false)
+      if (error) { toast.error('Failed to update item'); return }
+      toast.success('Item updated!')
+    } else {
+      const { error } = await supabase.from('menu_items').insert(payload)
+      setSaving(false)
+      if (error) { toast.error('Failed to add item'); return }
+      toast.success('Item added!')
+    }
+
+    resetForm()
     fetchMenu()
   }
 
@@ -254,38 +381,63 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-white font-bold">Menu Items ({items.length})</h3>
-          <button onClick={() => setShowItemForm(!showItemForm)}
+          <button onClick={() => { resetForm(); setShowItemForm(!showItemForm) }}
             className="flex items-center gap-1.5 bg-brand text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-orange-500 transition-colors">
             <Plus size={15} /> Add Item
           </button>
         </div>
 
-        {/* Add item form */}
+        {/* Add / Edit item form */}
         {showItemForm && (
-          <form onSubmit={addItem} className="bg-[#111] border border-white/10 rounded-xl p-5 mb-4 space-y-4">
-            <h4 className="text-white font-bold text-sm">New Menu Item</h4>
+          <form onSubmit={saveItem} className="bg-[#111] border border-white/10 rounded-xl p-5 mb-4 space-y-4">
+            <h4 className="text-white font-bold text-sm">{editingItem ? 'Edit Item' : 'New Menu Item'}</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2"><Label>Name *</Label><Input placeholder="e.g. Chicken Shawarma" value={itemForm.name} onChange={(e) => setItemForm(f => ({ ...f, name: e.target.value }))} required /></div>
-              <div className="sm:col-span-2"><Label>Description</Label><Textarea rows={2} placeholder="What's in it?" value={itemForm.description} onChange={(e) => setItemForm(f => ({ ...f, description: e.target.value }))} /></div>
-              <div><Label>Price ({restaurant.currency}) *</Label><Input type="number" step="0.01" placeholder="0.00" value={itemForm.price} onChange={(e) => setItemForm(f => ({ ...f, price: e.target.value }))} required /></div>
-              <div><Label>Category</Label>
+              <div className="sm:col-span-2">
+                <Label>Name *</Label>
+                <Input placeholder="e.g. Chicken Shawarma" value={itemForm.name}
+                  onChange={(e) => setItemForm(f => ({ ...f, name: e.target.value }))} required />
+              </div>
+              <div className="sm:col-span-2">
+                <Label>Description</Label>
+                <Textarea rows={2} placeholder="What's in it?" value={itemForm.description}
+                  onChange={(e) => setItemForm(f => ({ ...f, description: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Price ({restaurant.currency}) *</Label>
+                <Input type="number" step="0.01" placeholder="0.00" value={itemForm.price}
+                  onChange={(e) => setItemForm(f => ({ ...f, price: e.target.value }))} required />
+              </div>
+              <div>
+                <Label>Category</Label>
                 <select value={itemForm.category_id} onChange={(e) => setItemForm(f => ({ ...f, category_id: e.target.value }))}
                   className="w-full bg-[#1a1a1a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand appearance-none">
                   <option value="">No category</option>
                   {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
-              <div className="sm:col-span-2"><Label>Image URL</Label><Input placeholder="https://..." value={itemForm.image_url} onChange={(e) => setItemForm(f => ({ ...f, image_url: e.target.value }))} /></div>
+              <div className="sm:col-span-2">
+                <Label>Photo</Label>
+                <ImageUpload
+                  value={itemForm.image_url}
+                  onChange={(url) => setItemForm(f => ({ ...f, image_url: url }))}
+                />
+              </div>
               <div className="flex items-center gap-2">
-                <input type="checkbox" id="avail" checked={itemForm.is_available} onChange={(e) => setItemForm(f => ({ ...f, is_available: e.target.checked }))} className="accent-brand w-4 h-4" />
+                <input type="checkbox" id="avail" checked={itemForm.is_available}
+                  onChange={(e) => setItemForm(f => ({ ...f, is_available: e.target.checked }))}
+                  className="accent-brand w-4 h-4" />
                 <label htmlFor="avail" className="text-sm text-white/60">Available now</label>
               </div>
             </div>
             <div className="flex gap-2 pt-1">
-              <button type="submit" disabled={saving} className="bg-brand text-white font-bold px-5 py-2 rounded-lg text-sm hover:bg-orange-500 transition-colors disabled:opacity-50">
-                {saving ? 'Adding…' : 'Add Item'}
+              <button type="submit" disabled={saving}
+                className="bg-brand text-white font-bold px-5 py-2 rounded-lg text-sm hover:bg-orange-500 transition-colors disabled:opacity-50">
+                {saving ? 'Saving…' : editingItem ? 'Save Changes' : 'Add Item'}
               </button>
-              <button type="button" onClick={() => setShowItemForm(false)} className="border border-white/10 text-white/50 px-5 py-2 rounded-lg text-sm hover:bg-white/5 transition-colors">Cancel</button>
+              <button type="button" onClick={resetForm}
+                className="border border-white/10 text-white/50 px-5 py-2 rounded-lg text-sm hover:bg-white/5 transition-colors">
+                Cancel
+              </button>
             </div>
           </form>
         )}
@@ -301,10 +453,15 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
             {items.map((item) => (
               <div key={item.id} className="flex items-center justify-between bg-[#111] border border-white/10 rounded-xl px-4 py-3 hover:border-white/20 transition-colors">
                 <div className="flex items-center gap-3 min-w-0">
-                  {item.image_url && <img src={item.image_url} alt={item.name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />}
+                  {item.image_url && (
+                    <img src={item.image_url} alt={item.name} className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                  )}
                   <div className="min-w-0">
-                    <p className={`font-medium text-sm ${item.is_available ? 'text-white' : 'text-white/30 line-through'}`}>{item.name}</p>
-                    <p className="text-white/30 font-mono text-xs">{restaurant.currency} {item.price.toFixed(2)}
+                    <p className={`font-medium text-sm ${item.is_available ? 'text-white' : 'text-white/30 line-through'}`}>
+                      {item.name}
+                    </p>
+                    <p className="text-white/30 font-mono text-xs">
+                      {restaurant.currency} {item.price.toFixed(2)}
                       {item.category_id && categories.find(c => c.id === item.category_id) && (
                         <span className="ml-2 text-brand/60">{categories.find(c => c.id === item.category_id)?.name}</span>
                       )}
@@ -312,6 +469,10 @@ const MenuTab = ({ restaurant }: { restaurant: Restaurant }) => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                  <button onClick={() => openEditForm(item)}
+                    className="text-white/20 hover:text-white transition-colors px-2 py-1 text-xs font-mono border border-white/10 rounded-lg hover:border-white/20">
+                    Edit
+                  </button>
                   <button onClick={() => toggleAvailability(item)} title={item.is_available ? 'Mark unavailable' : 'Mark available'}
                     className="text-white/30 hover:text-brand transition-colors">
                     {item.is_available ? <ToggleRight size={20} className="text-green-400" /> : <ToggleLeft size={20} />}
@@ -354,10 +515,7 @@ const SettingsTab = ({ restaurant, onUpdate }: { restaurant: Restaurant; onUpdat
 
   return (
     <form onSubmit={save} className="space-y-5 max-w-lg">
-      <div>
-        <Label>Restaurant Name</Label>
-        <Input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} />
-      </div>
+      <div><Label>Restaurant Name</Label><Input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} /></div>
       <div>
         <Label>Your Menu URL</Label>
         <div className="bg-[#1a1a1a] border border-white/10 rounded-lg px-4 py-2.5 text-white/40 text-sm font-mono">
@@ -365,10 +523,7 @@ const SettingsTab = ({ restaurant, onUpdate }: { restaurant: Restaurant; onUpdat
         </div>
         <p className="text-white/20 text-xs mt-1">URL slug cannot be changed after creation</p>
       </div>
-      <div>
-        <Label>Description</Label>
-        <Textarea rows={2} value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} />
-      </div>
+      <div><Label>Description</Label><Textarea rows={2} value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} /></div>
       <div className="grid grid-cols-2 gap-4">
         <div><Label>Phone</Label><Input type="tel" value={form.phone} onChange={(e) => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
         <div>
@@ -379,10 +534,7 @@ const SettingsTab = ({ restaurant, onUpdate }: { restaurant: Restaurant; onUpdat
           </select>
         </div>
       </div>
-      <div>
-        <Label>Address</Label>
-        <Input value={form.address} onChange={(e) => setForm(f => ({ ...f, address: e.target.value }))} />
-      </div>
+      <div><Label>Address</Label><Input value={form.address} onChange={(e) => setForm(f => ({ ...f, address: e.target.value }))} /></div>
       <div className="flex items-center gap-3 py-2">
         <button type="button" onClick={() => setForm(f => ({ ...f, is_open: !f.is_open }))}>
           {form.is_open ? <ToggleRight size={28} className="text-green-400" /> : <ToggleLeft size={28} className="text-white/30" />}
@@ -393,7 +545,8 @@ const SettingsTab = ({ restaurant, onUpdate }: { restaurant: Restaurant; onUpdat
         </div>
       </div>
       <div className="flex gap-3 pt-2">
-        <button type="submit" disabled={saving} className="bg-brand text-white font-bold px-6 py-2.5 rounded-lg text-sm hover:bg-orange-500 transition-colors disabled:opacity-50">
+        <button type="submit" disabled={saving}
+          className="bg-brand text-white font-bold px-6 py-2.5 rounded-lg text-sm hover:bg-orange-500 transition-colors disabled:opacity-50">
           {saving ? 'Saving…' : 'Save changes'}
         </button>
         <button type="button" onClick={signOut}
@@ -406,7 +559,7 @@ const SettingsTab = ({ restaurant, onUpdate }: { restaurant: Restaurant; onUpdat
 }
 
 // ─── Dashboard shell ──────────────────────────────────────────────
-type Tab = 'orders' | 'menu' | 'settings'
+type Tab = 'orders' | 'history' | 'menu' | 'settings'
 
 const DashboardPage = () => {
   const { user } = useAuth()
@@ -440,6 +593,7 @@ const DashboardPage = () => {
 
   const tabs: { id: Tab; label: string; icon: typeof ShoppingBag }[] = [
     { id: 'orders', label: 'Orders', icon: ShoppingBag },
+    { id: 'history', label: 'History', icon: History },
     { id: 'menu', label: 'Menu', icon: UtensilsCrossed },
     { id: 'settings', label: 'Settings', icon: Settings },
   ]
@@ -480,6 +634,7 @@ const DashboardPage = () => {
       {/* Content */}
       <div className="px-5 md:px-10 py-8 max-w-4xl">
         {tab === 'orders' && <OrdersTab restaurant={restaurant} />}
+        {tab === 'history' && <HistoryTab restaurant={restaurant} />}
         {tab === 'menu' && <MenuTab restaurant={restaurant} />}
         {tab === 'settings' && <SettingsTab restaurant={restaurant} onUpdate={fetchRestaurant} />}
       </div>
