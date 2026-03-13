@@ -1,10 +1,11 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import ProtectedRoute from '@/components/ProtectedRoute'
 import LandingPage from '@/pages/LandingPage'
 import AuthPage from '@/pages/AuthPage'
 import OnboardingPage from '@/pages/OnboardingPage'
 import DashboardPage from '@/pages/DashboardPage'
 import MenuPage from '@/pages/MenuPage'
+import OrderTrackingPage from '@/pages/OrderTrackingPage'
 import BillPage from '@/pages/BillPage'
 import NotFound from '@/pages/NotFound'
 
@@ -16,6 +17,7 @@ const App = () => (
     <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
     <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
     <Route path="/menu/:slug" element={<MenuPage />} />
+    <Route path="/order/:orderId" element={<OrderTrackingPage />} />
     <Route path="/bill/:orderId" element={<BillPage />} />
     <Route path="*" element={<NotFound />} />
   </Routes>
